@@ -1,0 +1,100 @@
+---
+title: "OxCGRT analysis"
+output: html_notebook
+---
+
+Start by bringing in packages.
+
+```{r}
+library(tidyverse)
+library(plm)
+library(magrittr)
+library(oxcgrt)
+```
+
+Load in data and process it.
+
+```{r}
+files <- c('Confidence_The_Civil_Services.csv',
+           'Confidence_Justice_SystemCourts.csv',
+           'Confidence_The_Police.csv')
+
+dfs <- map(files, ~read_csv(.x) %>%
+             select(-X1) %>%
+             t() %>%
+             as.data.frame.matrix
+           )
+
+column_names <- c('A_great_deal',
+                  'Quite_a_lot',
+                  'Not_very_much',
+                  'None_at_all',
+                  'Do_not_know')
+
+names(dfs[[1]]) <- column_names
+names(dfs[[2]]) <- column_names
+names(dfs[[3]]) <- column_names
+
+dfs2 <- dfs %>%
+  map(function (x) { #x %<>%
+        # select(-Do_not_know)
+    
+        x$Total <- rowSums(x)
+        
+        x %<>%
+          transmute(
+            A_great_deal_num = (A_great_deal * 4) / Total,
+            Quite_a_lot_num = (Quite_a_lot * 3 ) / Total,
+            Not_very_much_num = (Not_very_much * 2 ) / Total,
+            None_at_all_num = (None_at_all) / Total
+          )
+
+        x %<>% rowSums()
+        
+        x
+  }
+  )
+
+dfs3 <- reduce(dfs2, bind_rows) %>%
+  t() %>%
+  as.data.frame.matrix() %>%
+  rowMeans() %>%
+  as.data.frame %>% 
+  rownames_to_column('country')
+
+names(dfs3) <- c('country', 'govt_trust')
+```
+
+Get OxCGRT data
+
+```{r}
+oxcgrt_data <- get_json_time(from = "2020-01-01", 
+                 to = "2020-12-31") %>% 
+  get_data_time()
+```
+
+Join datasets
+
+```{r}
+country_key <- read_csv('countries.csv')
+
+names(country_key) <- c('country', 'country_name')
+
+combined_data <- dfs3 %>%
+  left_join(country_key) %>%
+  right_join(oxcgrt_data)
+```
+
+```{r}
+
+```
+
+
+```{r}
+model <- plm(inv ~ value + capital,
+            data = Grunfeld, model = "random", effect = "twoways")
+```
+
+
+
+
