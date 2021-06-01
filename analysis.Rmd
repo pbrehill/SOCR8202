@@ -10,6 +10,9 @@ library(tidyverse)
 library(plm)
 library(magrittr)
 library(oxcgrt)
+library(zoo)
+library(EpiEstim)
+library(imputeTS)
 ```
 
 Load in data and process it.
@@ -86,13 +89,75 @@ combined_data <- dfs3 %>%
 ```
 
 ```{r}
+combined_data %<>%
+  group_by(country_code) %>%
+  mutate(incidence = confirmed - dplyr::lag(confirmed))
 
+no_missing <- combined_data[complete.cases(combined_data),]
+
+no_missing[no_missing$incidence < 0, 'incidence'] <- NA
+
+no_missing %<>%
+  # group_by(country_code) %>%
+  imputeTS::na_locf(na_remaining = "rev")
+
+combined_data %<>%
+  mutate(cases_14da = zoo::rollmean(incidence, k = 14, fill = NA, align = 'left'),
+         cases_log = log(cases_14da + 1)
+         )
+```
+
+Remove missing and impute where we've removed negative cases to last observation.
+
+```{r}  
+
+  
+```
+
+Filter from first day with 100+ cases, impute missing days with previous value
+
+
+Get R value estimate
+```{r, warning = FALSE}
+R_results_list <- list()
+
+no_missing$R_est <- NA
+for (i in 1:length(unique(no_missing$country_code)))   {
+    index_code <- unique(no_missing$country_code)[i]
+    
+    R_ests <- estimate_R(no_missing$incidence[no_missing$country_code == index_code],
+             method="parametric_si",
+             config = make_config(list(
+               mean_si = 4.8, 
+               std_si = 2.3))
+             )
+    # Get R spreadsheet and add in proper dates
+    R_ests <- R_ests$R[complete.cases(R_ests$R),]
+    R_ests$date_value <- no_missing$date_value[R_ests$t_start]
+    
+    R_results_list[[index_code]] <- R_ests
+  }
+
+R_results <- bind_rows(R_results_list, .id = "country_code")
+```
+
+```{r}
+final_data <- left_join(no_missing, R_results, by = c('date_value', "country_code")) %>% imputeTS::na_locf(na_remaining = "rev")
+
+final_data$R_est <- final_data$`Mean(R)`
+```
+Remove any data before case 100 (as an experiment).
+
+```{r}
+final_data_100 <- final_data %>%
+  filter(confirmed >= 100)
 ```
 
 
 ```{r}
-model <- plm(inv ~ value + capital,
-            data = Grunfeld, model = "random", effect = "twoways")
+model <- plm(cases_log ~ stringency + govt_trust + stringency * govt_trust,
+            data = final_data_100, model = "random", effect = "twoways",
+            index = c("country_code", "date_value"))
 ```
 
 
