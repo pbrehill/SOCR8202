@@ -109,11 +109,6 @@ combined_data %<>%
 
 Remove missing and impute where we've removed negative cases to last observation.
 
-```{r}  
-
-  
-```
-
 Filter from first day with 100+ cases, impute missing days with previous value
 
 
@@ -142,7 +137,9 @@ R_results <- bind_rows(R_results_list, .id = "country_code")
 ```
 
 ```{r}
-final_data <- left_join(no_missing, R_results, by = c('date_value', "country_code")) %>% imputeTS::na_locf(na_remaining = "rev")
+final_data <- left_join(no_missing, R_results, by = c('date_value', "country_code")) %>%
+  mutate(future_effect = `Mean(R)` - dplyr::lead(`Mean(R)`, 14)) %>%
+  imputeTS::na_locf(na_remaining = "rev")
 
 final_data$R_est <- final_data$`Mean(R)`
 ```
@@ -155,7 +152,7 @@ final_data_100 <- final_data %>%
 
 
 ```{r}
-model <- plm(cases_log ~ stringency + govt_trust + stringency * govt_trust,
+model <- plm(future_effect ~ stringency + govt_trust + stringency * govt_trust,
             data = final_data_100, model = "random", effect = "twoways",
             index = c("country_code", "date_value"))
 ```
