@@ -76,6 +76,13 @@ oxcgrt_data <- get_json_time(from = "2020-01-01",
   get_data_time()
 ```
 
+Get GDP data
+
+```{r}
+gdp <- read_csv('GDP.csv')
+```
+
+
 Join datasets
 
 ```{r}
@@ -85,14 +92,18 @@ names(country_key) <- c('country', 'country_name')
 
 combined_data <- dfs3 %>%
   left_join(country_key) %>%
-  right_join(oxcgrt_data)
+  right_join(oxcgrt_data) %>%
+  left_join(gdp)
 ```
 
 ```{r}
 combined_data %<>%
   group_by(country_code) %>%
-  mutate(incidence = confirmed - dplyr::lag(confirmed))
-
+  mutate(incidence = confirmed - dplyr::lag(confirmed),
+         cases_4da = zoo::rollmean(incidence, k = 14, fill = NA, align = 'right'),
+         future_effect = (dplyr::lead(cases_4da, 14) - dplyr::lag(cases_4da, 0)) / -dplyr::lag(cases_4da, 0),
+        t = as.POSIXct(date_value),
+        t = as.Date(t))
 no_missing <- combined_data[complete.cases(combined_data),]
 
 no_missing[no_missing$incidence < 0, 'incidence'] <- NA
@@ -100,11 +111,6 @@ no_missing[no_missing$incidence < 0, 'incidence'] <- NA
 no_missing %<>%
   # group_by(country_code) %>%
   imputeTS::na_locf(na_remaining = "rev")
-
-combined_data %<>%
-  mutate(cases_14da = zoo::rollmean(incidence, k = 14, fill = NA, align = 'left'),
-         cases_log = log(cases_14da + 1)
-         )
 ```
 
 Remove missing and impute where we've removed negative cases to last observation.
@@ -119,17 +125,20 @@ R_results_list <- list()
 no_missing$R_est <- NA
 for (i in 1:length(unique(no_missing$country_code)))   {
     index_code <- unique(no_missing$country_code)[i]
-    
+
     R_ests <- estimate_R(no_missing$incidence[no_missing$country_code == index_code],
              method="parametric_si",
              config = make_config(list(
-               mean_si = 4.8, 
+               mean_si = 4.8,
                std_si = 2.3))
              )
+
+    plot(R_ests)
+
     # Get R spreadsheet and add in proper dates
     R_ests <- R_ests$R[complete.cases(R_ests$R),]
     R_ests$date_value <- no_missing$date_value[R_ests$t_start]
-    
+
     R_results_list[[index_code]] <- R_ests
   }
 
@@ -138,10 +147,18 @@ R_results <- bind_rows(R_results_list, .id = "country_code")
 
 ```{r}
 final_data <- left_join(no_missing, R_results, by = c('date_value', "country_code")) %>%
-  mutate(future_effect = `Mean(R)` - dplyr::lead(`Mean(R)`, 14)) %>%
+  mutate(future_effect = (dplyr::lead(`Mean(R)`, 7) - dplyr::lag(`Mean(R)`, 7)) / -dplyr::lag(`Mean(R)`, 7),
+stringency_change = stringency - dplyr::lag(stringency)) %>%
   imputeTS::na_locf(na_remaining = "rev")
 
 final_data$R_est <- final_data$`Mean(R)`
+
+# Test just looking at changes
+final_data %<>%
+  filter(stringency != dplyr::lag(stringency)) %>%
+  mutate(next_change = dplyr::lead(t) - t,
+        last_change = t - dplyr::lag(t)) %>%
+  filter(last_change >= 7, next_change >= 7)
 ```
 Remove any data before case 100 (as an experiment).
 
@@ -152,11 +169,56 @@ final_data_100 <- final_data %>%
 
 
 ```{r}
-model <- plm(future_effect ~ stringency + govt_trust + stringency * govt_trust,
+model <- plm(future_effect ~ stringency_change + govt_trust  + stringency_change * govt_trust,
             data = final_data_100, model = "random", effect = "twoways",
             index = c("country_code", "date_value"))
 ```
 
+```{r}
+summary(model)
+```
+
+Get correlations to understand this effect.
 
 
+```{r}
+R_plots <- final_data_100$country_code %>%
+  unique() %>%
+  map(~filter(final_data_100, country_code == .x) %>%
+    ggplot(aes(x = t, R_est)) +
+      geom_line(colour = 'red') +
+      geom_line(aes(y = stringency / 20), colour = 'blue') + 
+      facet_wrap(vars(country_code))
+  )
+```
+
+```{r}
+R_cors <- final_data_100$country_code %>%
+  unique() %>%
+  map(~filter(final_data_100, country_code == .x) %>%
+    ungroup() %>%
+    select(stringency, R_est, govt_trust) %>%
+    cor(use = "pairwise.complete.obs"))
+
+for (i in 1:length(R_cors)) {
+  R_cors[[i]] <- R_cors[[i]][1,2]
+}
+
+R_cors %<>% unlist
+```
+
+
+```{r}
+final_data_100 %>%
+    group_by(country_code) %>%
+    summarise(meanR = mean(R_est), govt = mean(govt_trust)) %>%
+    ggplot(aes(meanR, govt)) +
+        geom_point()
+
+final_data_100 %>%
+    group_by(country_code) %>%
+    summarise(meanR = mean(R_est), meanString = mean(stringency)) %>%
+    ggplot(aes(meanR, meanString)) +
+        geom_point()
+```
 
