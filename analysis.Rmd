@@ -7,7 +7,7 @@ Start by bringing in packages.
 
 ```{r}
 # global vars
-days_lead <- 7
+days_lead <- 14
 days_lag <- 0
 R_est_window <- 2
 ```
@@ -124,11 +124,15 @@ combined_data %<>%
   mutate(incidence = confirmed - dplyr::lag(confirmed),
          inc_pop = incidence / pop2019,
          inc_pop_4da = zoo::rollmean(inc_pop, k = 4, fill = NA, align = 'right'),
+         inc_pop_4da_change = (dplyr::lead(inc_pop_4da, days_lead) - dplyr::lag(inc_pop_4da, days_lag)) / -dplyr::lag(inc_pop_4da, days_lag),
         t = as.POSIXct(date_value),
         t = as.Date(t))
 no_missing <- combined_data[complete.cases(combined_data),]
 
 no_missing[no_missing$incidence < 0, 'incidence'] <- NA
+
+no_missing[no_missing$inc_pop_4da_change < 0, 'inc_pop_4da_change'] <- NA
+
 
 no_missing %<>%
   # group_by(country_code) %>%
@@ -197,12 +201,13 @@ Remove any data before case 100 (as an experiment).
 
 ```{r}
 final_data_100 <- final_data %>%
-  filter(confirmed >= 100)
+  filter(confirmed >= 100) %>%
+  filter(!is.na(inc_pop_4da_change))
 ```
 
 
 ```{r}
-model <- plm(future_effect ~ stringency_change + inc_pop_4da + log(GDP) + log(Density) + govt_trust  + stringency_change * govt_trust,
+model <- plm(inc_pop_4da_change ~ stringency_change + inc_pop_4da + log(GDP) + log(Density) + govt_trust  + stringency_change * govt_trust,
             data = final_data_100, model = "random", effect = "individual",
             index = c("country_code"))
 ```
