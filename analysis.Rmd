@@ -6,6 +6,14 @@ output: html_notebook
 Start by bringing in packages.
 
 ```{r}
+# global vars
+days_lead <- 7
+days_lag <- 0
+R_est_window <- 3
+```
+
+
+```{r}
 library(tidyverse)
 library(plm)
 library(magrittr)
@@ -68,6 +76,7 @@ dfs3 <- reduce(dfs2, bind_rows) %>%
 names(dfs3) <- c('country', 'govt_trust')
 ```
 
+
 Get OxCGRT data
 
 ```{r}
@@ -125,15 +134,23 @@ R_results_list <- list()
 no_missing$R_est <- NA
 for (i in 1:length(unique(no_missing$country_code)))   {
     index_code <- unique(no_missing$country_code)[i]
+    country_incidence <-  no_missing$incidence[no_missing$country_code == index_code]
+    
+    T <- length(country_incidence)
 
-    R_ests <- estimate_R(no_missing$incidence[no_missing$country_code == index_code],
+  t_start <- seq(2, T - R_est_window) # starting at 2 as conditional on the past observations
+  t_end <- t_start + R_est_window # adding 2 to get 3-day windows as bounds included in window
+    
+    R_ests <- estimate_R(country_incidence,
              method="parametric_si",
              config = make_config(list(
                mean_si = 4.8,
-               std_si = 2.3))
+               std_si = 2.3,
+               t_start = t_start,
+               t_end = t_end))
              )
 
-    plot(R_ests)
+    # plot(R_ests)
 
     # Get R spreadsheet and add in proper dates
     R_ests <- R_ests$R[complete.cases(R_ests$R),]
@@ -145,20 +162,23 @@ for (i in 1:length(unique(no_missing$country_code)))   {
 R_results <- bind_rows(R_results_list, .id = "country_code")
 ```
 
+
+
 ```{r}
 final_data <- left_join(no_missing, R_results, by = c('date_value', "country_code")) %>%
-  mutate(future_effect = (dplyr::lead(`Mean(R)`, 7) - dplyr::lag(`Mean(R)`, 7)) / -dplyr::lag(`Mean(R)`, 7),
+  mutate(future_effect = (dplyr::lead(`Mean(R)`, days_lead) - dplyr::lag(`Mean(R)`, days_lag)) / -dplyr::lag(`Mean(R)`, days_lag),
 stringency_change = stringency - dplyr::lag(stringency)) %>%
   imputeTS::na_locf(na_remaining = "rev")
 
 final_data$R_est <- final_data$`Mean(R)`
 
 # Test just looking at changes
+# Added only stringency increases
 final_data %<>%
-  filter(stringency != dplyr::lag(stringency)) %>%
-  mutate(next_change = dplyr::lead(t) - t,
-        last_change = t - dplyr::lag(t)) %>%
-  filter(last_change >= 7, next_change >= 7)
+filter(stringency > dplyr::lag(stringency)) %>%
+mutate(next_change = dplyr::lead(t) - t,
+      last_change = t - dplyr::lag(t)) %>%
+filter(last_change >= 7, next_change >= 7)
 ```
 Remove any data before case 100 (as an experiment).
 
@@ -170,8 +190,8 @@ final_data_100 <- final_data %>%
 
 ```{r}
 model <- plm(future_effect ~ stringency_change + govt_trust  + stringency_change * govt_trust,
-            data = final_data_100, model = "random", effect = "twoways",
-            index = c("country_code", "date_value"))
+            data = final_data_100, model = "random", effect = "individual",
+            index = c("country_code"))
 ```
 
 ```{r}
@@ -220,5 +240,22 @@ final_data_100 %>%
     summarise(meanR = mean(R_est), meanString = mean(stringency)) %>%
     ggplot(aes(meanR, meanString)) +
         geom_point()
+```
+
+```{r}
+lebanon <- no_missing %>% 
+  filter(country_code == 'LBN') %>%
+  mutate(changes = stringency != dplyr::lag(stringency))
+
+lebanon %>% 
+  ggplot(aes(x = t, y = incidence)) + 
+    geom_line() + 
+    geom_line(aes(y=rollmean(incidence, 7, na.pad=TRUE))) +
+    geom_vline(xintercept=lebanon$t[which(lebanon$changes)], linetype=4, colour="red")
+```
+```{r}
+final_data_100 %>%
+  ggplot(aes(x = stringency_change, y = R_est)) +
+  geom_point()
 ```
 
