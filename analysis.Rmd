@@ -9,7 +9,7 @@ Start by bringing in packages.
 # global vars
 days_lead <- 7
 days_lag <- 0
-R_est_window <- 3
+R_est_window <- 2
 ```
 
 
@@ -80,9 +80,10 @@ names(dfs3) <- c('country', 'govt_trust')
 Get OxCGRT data
 
 ```{r}
-oxcgrt_data <- get_json_time(from = "2020-01-01", 
-                 to = "2020-12-31") %>% 
-  get_data_time()
+oxcgrt_selector <- get_json_time(from = "2020-01-01", 
+                 to = "2020-12-31")
+
+oxcgrt_data <- oxcgrt_selector %>% get_data_time()
 ```
 
 Get GDP data
@@ -91,10 +92,19 @@ Get GDP data
 gdp <- read_csv('GDP.csv')
 ```
 
+Population data
+
+```{r}
+pop <- read_csv('population.csv')
+```
+
+
 
 Join datasets
 
 ```{r}
+european <- c("Albania", "Andorra", "Austria", "Bosnia & Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Iceland", "Italy", "Lithuania", "Netherlands", "Norway", "Poland", "Portugal", "Romania", "Russia", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland", "Ukraine","United Kingdom")
+
 country_key <- read_csv('countries.csv')
 
 names(country_key) <- c('country', 'country_name')
@@ -102,15 +112,18 @@ names(country_key) <- c('country', 'country_name')
 combined_data <- dfs3 %>%
   left_join(country_key) %>%
   right_join(oxcgrt_data) %>%
-  left_join(gdp)
+  left_join(gdp) %>%
+  left_join(pop, by = 'country_code') #%>%
+  # filter(country_name %in% european)
 ```
 
 ```{r}
 combined_data %<>%
   group_by(country_code) %>%
+  select(-pop2018) %>%
   mutate(incidence = confirmed - dplyr::lag(confirmed),
-         cases_4da = zoo::rollmean(incidence, k = 14, fill = NA, align = 'right'),
-         future_effect = (dplyr::lead(cases_4da, 14) - dplyr::lag(cases_4da, 0)) / -dplyr::lag(cases_4da, 0),
+         inc_pop = incidence / pop2019,
+         inc_pop_4da = zoo::rollmean(inc_pop, k = 4, fill = NA, align = 'right'),
         t = as.POSIXct(date_value),
         t = as.Date(t))
 no_missing <- combined_data[complete.cases(combined_data),]
@@ -189,7 +202,7 @@ final_data_100 <- final_data %>%
 
 
 ```{r}
-model <- plm(future_effect ~ stringency_change + govt_trust  + stringency_change * govt_trust,
+model <- plm(future_effect ~ stringency_change + inc_pop_4da + log(GDP) + log(Density) + govt_trust  + stringency_change * govt_trust,
             data = final_data_100, model = "random", effect = "individual",
             index = c("country_code"))
 ```
@@ -255,7 +268,37 @@ lebanon %>%
 ```
 ```{r}
 final_data_100 %>%
+  mutate(rounded_govt_trust = round(govt_trust)) %>%
   ggplot(aes(x = stringency_change, y = R_est)) +
-  geom_point()
+  geom_point() +
+  facet_wrap(vars(rounded_govt_trust))
+```
+Get the R by govt_trust for changes to see if more trusted govts lock down sooner
+
+```{r}
+final_data_100 %>%
+  ggplot(aes(x = govt_trust, y = R_est)) +
+  geom_point() +
+  geom_smooth(method = 'lm')
+
+R_est_trust <- lm(R_est ~ govt_trust, final_data_100)
+```
+
+
+Get the stringency by govt_trust to see if more trusted govts are more stringent.
+
+```{r}
+final_data_100 %>%
+  ggplot(aes(x = govt_trust, y = stringency_change)) +
+  geom_point() +
+  geom_smooth(method = 'lm')
+
+string_trust <- lm(stringency_change ~ govt_trust, final_data_100)
+```
+
+```{r}
+stringency1 <- lm(stringency ~ govt_trust + inc_pop, final_data_100)
+
+summary(stringency1)
 ```
 
