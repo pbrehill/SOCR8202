@@ -21,6 +21,7 @@ library(oxcgrt)
 library(zoo)
 library(EpiEstim)
 library(imputeTS)
+library(ggpubr)
 ```
 
 Load in data and process it.
@@ -261,16 +262,32 @@ final_data_100 %>%
 ```
 
 ```{r}
-lebanon <- no_missing %>% 
-  filter(country_code == 'LBN') %>%
-  mutate(changes = stringency != dplyr::lag(stringency))
+lebanon <- no_missing %>%
+    mutate(changes = stringency != dplyr::lag(stringency))
 
-lebanon %>% 
-  ggplot(aes(x = t, y = incidence)) + 
-    geom_line() + 
-    geom_line(aes(y=rollmean(incidence, 7, na.pad=TRUE))) +
-    geom_vline(xintercept=lebanon$t[which(lebanon$changes)], linetype=4, colour="red")
+country_changes <- lebanon$country_code %>%
+  map(function (x) {
+    slct <- filter(lebanon, country_code == x) %>%
+      ungroup() %>%
+      select(changes)
+    
+    slct[is.na(slct)] <- FALSE
+    
+    print(slct)
+    
+    lebanon$t[slct %>% pull()]
+  })
 ```
+
+```{r}  
+  lebanon %>% 
+    ggplot(aes(x = t, y = incidence)) + 
+      geom_line() + 
+      geom_line(aes(y=rollmean(incidence, 7, na.pad=TRUE))) +
+      geom_vline(data = lebanon xintercept=lebanon$t[which(lebanon$changes)], linetype=4, colour="red")
+```
+
+
 ```{r}
 final_data_100 %>%
   mutate(rounded_govt_trust = round(govt_trust)) %>%
@@ -305,5 +322,15 @@ string_trust <- lm(stringency_change ~ govt_trust, final_data_100)
 stringency1 <- lm(stringency ~ govt_trust + inc_pop, final_data_100)
 
 summary(stringency1)
+```
+```{r}
+no_missing %>%
+  mutate(cases_per_cap = confirmed / pop2019) %>%
+  group_by(country_code) %>%
+  summarise(cases = max(cases_per_cap),
+            govt_trust = max(govt_trust)) %>%
+  ggplot(aes(x = govt_trust, y = cases)) +
+    geom_point() +
+    geom_smooth()
 ```
 
